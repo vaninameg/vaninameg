@@ -145,7 +145,7 @@ end
 
 function CreateSprite(pList, pType, psImageFile, pnFrames)
   local mySprite = {} -- Crée une table vide pour représenter le sprite
-  mySprite.type = pType -- Définit le type du sprite (ex : "human", "zombie")
+  mySprite.type = pType -- Définit le type du sprite
   mySprite.visible = true  -- Le sprite est visible à l’écran. Cela veut dire que par défaut, le sprite (personnage, zombie, etc.) est visible dans le jeu. Quand la vie tombe à 0, le sprite disparaît, mais il reste dans la mémoire
   
   mySprite.images = {} -- Stocke les images d’animation (frames)
@@ -153,7 +153,7 @@ function CreateSprite(pList, pType, psImageFile, pnFrames)
   
   local i
   -- Charge chaque image correspondant à une frame d’animation
-  for i=1,pnFrames do -- Construit le nom du fichier image (ex: player_1.png)
+  for i=1,pnFrames do -- Construit le nom du fichier image
     local fileName = "images/"..psImageFile..tostring(i)..".png" -- Affiche dans la console le fichier en cours de chargement
     print("Loading frame "..fileName)-- Affiche dans la console le fichier en cours de chargement
     mySprite.images[i] = love.graphics.newImage(fileName)
