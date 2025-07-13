@@ -1,0 +1,278 @@
+-- Cette ligne permet d'afficher des traces dans la console pendant l'éxécution, desactiver la mémoire tampon. Pratique pour le débuggage
+io.stdout:setvbuf('no')
+
+-- Empèche Love de filtrer les contours des images quand elles sont redimentionnées
+-- Indispensable pour du pixel art
+love.graphics.setDefaultFilter("nearest") -- concerne leurs contours pixelisés (jeu rétro) -- autre mode "linear"
+
+-- Cette ligne permet de déboguer pas à pas dans ZeroBraneStudio -- verifie si le programme a bien été envoyé. permet de mieux analyser - activer le mode debuggage
+if arg[#arg] == "-debug" then require("mobdebug").start() end
+
+-- Returns the distance between two points.
+function math.dist(x1,y1, x2,y2) return ((x2-x1)^2+(y2-y1)^2)^0.5 end
+
+-- Returns the angle between two points.
+function math.angle(x1,y1, x2,y2) return math.atan2(y2-y1, x2-x1) end
+
+-- Liste de tous les sprites présents dans le jeu (zombies et humains)
+local lstSprites = {}
+
+-- Référence unique au joueur humain (le personnage contrôlé)
+local theHuman = {}
+
+-- États possibles pour les zombies (machine à états)
+local ZSTATES = {}
+ZSTATES.NONE = ""            -- Aucun état
+ZSTATES.WALK = "walk"        -- Marche
+ZSTATES.ATTACK = "attack"    -- Attaque
+ZSTATES.BITE = "bite"        -- Morsure
+ZSTATES.CHANGEDIR = "change" -- Changement de direction
+
+-- Image d'alerte (affichée au-dessus d'un zombie quand il attaque)
+local imgAlert = love.graphics.newImage("images/alert.png")
+
+-- Fonction de création d'un zombie, avec ses caractéristiques aléatoires
+function CreateZombie()
+  local myZombie = CreateSprite(lstSprites, "zombie", "monster_", 2)  -- Sprite animé avec 2 frames
+  myZombie.x = math.random(10, screenWidth-10) -- Position X aléatoire du zombie, fourchette de valeur possible
+  myZombie.y = math.random(10, (screenHeight/2)-10) -- Position Y aléatoire, dans le haut de l'écran
+  
+  myZombie.speed = math.random(5,50) / 200 -- Vitesse aléatoire
+  myZombie.range = math.random(10, 150)  -- Distance de détection -- range = portée , la zone de détection
+  myZombie.target = nil  -- Cible actuelle (humain détecté) - pas encore de cible
+  
+  myZombie.state = ZSTATES.NONE    -- Commence sans comportement défini
+end
+
+-- Met à jour le comportement du zombie selon son état
+-- Fonction appelée à chaque frame pour mettre à jour le comportement d’un zombie
+-- Elle prend en paramètre le zombie concerné (pZombie) et la liste des entités visibles (pEntities)
+function UpdateZombie(pZombie, pEntities)
+  -- Vérifie que le zombie a bien un état défini (sécurité)
+  if pZombie.state == nil then
+    print("***** ERROR STATE NIL *****") -- Aide à détecter une erreur
+  end
+  
+  if pZombie.state == ZSTATES.NONE then --s'occuper de changer son état
+    pZombie.state = ZSTATES.CHANGEDIR -- Si aucun état, il commence par choisir une direction
+  elseif pZombie.state == ZSTATES.WALK then    
+     -- Gère les collisions avec les bords de l'écran
+    local bCollide = false -- on met un b devant pour dire que c'est un booléen 
+    if pZombie.x < 0 then -- code pour que si les zombies touchent les bords il change de directon
+      pZombie.x = 0
+      bCollide = true
+    end
+    if pZombie.x > screenWidth then
+      pZombie.x = screenWidth
+      bCollide = true
+    end
+    if pZombie.y < 0 then
+      pZombie.y = 0
+      bCollide = true
+    end
+    if pZombie.y > screenHeight then
+      pZombie.y = screenHeight
+      bCollide = true
+    end
+    if bCollide then
+      pZombie.state = ZSTATES.CHANGEDIR -- Rechange de direction si collision
+    end
+    
+    -- Look for humans! (on cherche des humains !)  -- Recherche d'humains proches à attaquer
+    local i
+    
+      -- Recherche d'humains proches à attaquer
+    for i,sprite in ipairs(pEntities) do -- Parcours de toutes les entités (sprites) iparis = “indexed pairs”
+      if sprite.type == "human" and sprite.visible == true then -- Si l'entité est un humain visible
+        local distance = math.dist(pZombie.x, pZombie.y, sprite.x, sprite.y) -- Distance au zombie
+        if distance < pZombie.range then -- Si dans le rayon d'attaque du zombie
+          pZombie.state = ZSTATES.ATTACK -- Changer d'état pour "attack"
+          pZombie.target = sprite -- L'humain devient la cible
+        end
+      end
+    end
+    
+  elseif pZombie.state == ZSTATES.ATTACK then
+     -- Attaque le joueur s'il est à portée
+    
+    if pZombie.target == nil then -- Si la cible est perdue (effacée ou disparue)
+      pZombie.state = ZSTATES.CHANGEDIR -- On change de direction
+    elseif math.dist(pZombie.x, pZombie.y, pZombie.target.x, pZombie.target.y) > pZombie.range 
+        and pZombie.target.type == "human" then -- Si la cible est hors de portée
+      pZombie.state = ZSTATES.CHANGEDIR
+      print("Lost contact") -- Affichage dans la console
+    elseif math.dist(pZombie.x, pZombie.y, pZombie.target.x, pZombie.target.y) < 5 
+        and pZombie.target.type == "human" then  -- Si très proche de la cible
+      pZombie.state = ZSTATES.BITE -- Passer à la morsure
+      pZombie.vx = 0 -- Arrêt du mouvement, arret la marche du zombie sinon il va dépasser
+      pZombie.vy = 0
+    else
+      -- Attack!!!-- Se dirige vers une position aléatoire proche de la cible (évite les lignes droites)
+      -- Prépare un point vers lequel le zombie va se diriger (près de l’humain, mais pas exactement dessus)
+      local destX, destY -- dest = destinaton,-- Crée deux variables pour stocker une destination aléatoire proche de l’humain que le zombie va essayer d’atteindre. Cela rend ses déplacements moins linéaires et plus naturels.
+      destX = math.random(pZombie.target.x-20, pZombie.target.x+20)
+      destY = math.random(pZombie.target.y-20, pZombie.target.y+20)
+      local angle = math.angle(pZombie.x, pZombie.y, destX, destY)
+      pZombie.vx = pZombie.speed * 2 * 60 * math.cos(angle) -- Calcul de la vitesse x
+      pZombie.vy = pZombie.speed * 2 * 60 * math.sin(angle) -- Calcul de la vitesse y
+    end
+    
+  elseif pZombie.state == ZSTATES.BITE then
+     -- Morsure
+    if math.dist(pZombie.x, pZombie.y, pZombie.target.x, pZombie.target.y) > 5  then
+      pZombie.state = ZSTATES.ATTACK -- Si la cible s'éloigne, retourne à ATTACK
+    else
+      if pZombie.target.Hurt ~= nil then -- Si la fonction "Hurt" existe
+        pZombie.target.Hurt() -- On l'appelle pour blesser l'humain
+      end
+      if pZombie.target.visible == false then -- Si l'humain est mort
+        pZombie.state = ZSTATES.CHANGEDIR -- Reprend une direction au hasard
+      end
+    end
+  
+elseif pZombie.state == ZSTATES.CHANGEDIR then
+  -- Nouveau déplacement dans une direction aléatoire
+  
+    local angle = math.angle(pZombie.x, pZombie.y, math.random(0,screenWidth), math.random(0, screenHeight))
+    pZombie.vx = pZombie.speed * 60 * math.cos(angle)
+    pZombie.vy = pZombie.speed * 60 * math.sin(angle)
+    
+    pZombie.state = ZSTATES.WALK  -- Après avoir changé de direction, il marche
+
+  end
+
+end
+
+function CreateSprite(pList, pType, psImageFile, pnFrames)
+  local mySprite = {} -- Crée une table vide pour représenter le sprite
+  mySprite.type = pType -- Définit le type du sprite (ex : "human", "zombie")
+  mySprite.visible = true  -- Le sprite est visible à l’écran. Cela veut dire que par défaut, le sprite (personnage, zombie, etc.) est visible dans le jeu. Quand la vie tombe à 0, le sprite disparaît, mais il reste dans la mémoire
+  
+  mySprite.images = {} -- Stocke les images d’animation (frames)
+  mySprite.currentFrame = 1 -- Commence à la première image
+  
+  local i
+  -- Charge chaque image correspondant à une frame d’animation
+  for i=1,pnFrames do -- Construit le nom du fichier image (ex: player_1.png)
+    local fileName = "images/"..psImageFile..tostring(i)..".png" -- Affiche dans la console le fichier en cours de chargement
+    print("Loading frame "..fileName)-- Affiche dans la console le fichier en cours de chargement
+    mySprite.images[i] = love.graphics.newImage(fileName)
+  end
+  
+  -- Position du sprite
+  mySprite.x = 0
+  mySprite.y = 0
+  -- Vitesse du sprite (utilisée pour les déplacements automatiques)
+  mySprite.vx = 0
+  mySprite.vy = 0
+  -- Dimensions (largeur et hauteur) calculées à partir de la première image
+  mySprite.width = mySprite.images[1]:getWidth()
+  mySprite.height = mySprite.images[1]:getHeight()
+  
+  -- Ajoute le sprite à une liste (généralement lstSprites)
+  table.insert(pList, mySprite)
+  
+  return mySprite
+end
+
+function CreateHuman()
+  local myHuman = {} --perso
+  myHuman = CreateSprite(lstSprites, "human", "player_", 4)
+  myHuman.x = screenWidth / 2
+  myHuman.y = (screenHeight / 6) * 5
+  myHuman.life = 100 -- point de vie
+  myHuman.Hurt = function()
+    myHuman.life = theHuman.life - 0.1
+    if myHuman.life <= 0 then
+      myHuman.life = 0
+      myHuman.visible = false
+    end
+  end
+  
+  return myHuman
+end
+
+function love.load()
+  
+  love.window.setTitle("Zombie IA (c) Gamecodeur")
+  
+  screenWidth = love.graphics.getWidth() / 2
+  screenHeight = love.graphics.getHeight() / 2
+  
+  theHuman = CreateHuman()
+  
+  local nZombie
+  for nZombie=1,20 do
+    CreateZombie()
+  end
+  
+end
+
+function love.update(dt)
+  
+  local i
+  for i,sprite in ipairs(lstSprites) do
+    sprite.currentFrame = sprite.currentFrame + 0.1 * 60 * dt
+    if sprite.currentFrame >= #sprite.images + 1 then
+      sprite.currentFrame = 1
+    end
+    -- Velocity
+    sprite.x = sprite.x + sprite.vx * dt
+    sprite.y = sprite.y + sprite.vy * dt
+    
+    if sprite.type == "zombie" then
+      UpdateZombie(sprite, lstSprites)
+    end
+  end
+
+  if love.keyboard.isDown("left") then
+    theHuman.x = theHuman.x - 1 * 60 * dt
+  end
+  if love.keyboard.isDown("up") then
+    theHuman.y = theHuman.y - 1 * 60 * dt
+  end
+  if love.keyboard.isDown("right") then
+    theHuman.x = theHuman.x + 1 * 60 * dt
+  end
+  if love.keyboard.isDown("down") then
+    theHuman.y = theHuman.y + 1 * 60 * dt
+  end
+
+end
+
+function love.draw()
+  
+  love.graphics.push()
+    
+  love.graphics.scale(2,2)
+  
+  love.graphics.print("LIFE:"..tostring(math.floor(theHuman.life)), 1, 1)
+
+  local i
+  for i,sprite in ipairs(lstSprites) do
+    if sprite.visible == true then
+      local frame = sprite.images[math.floor(sprite.currentFrame)]
+      love.graphics.draw(frame, sprite.x - sprite.width / 2 , sprite.y - sprite.height / 2)
+      
+      if sprite.type == "zombie" then
+        if love.keyboard.isDown("d") then
+          love.graphics.print(sprite.state, sprite.x - 10, sprite.y - sprite.height - 10)
+        end
+        if sprite.state == ZSTATES.ATTACK then
+          love.graphics.draw(imgAlert,
+            sprite.x - imgAlert:getWidth()/2,
+            sprite.y - sprite.height - 2)
+        end
+      end
+    end
+  end
+  
+  love.graphics.pop()
+    
+end
+
+function love.keypressed(key)
+  
+  print(key)
+  
+end
